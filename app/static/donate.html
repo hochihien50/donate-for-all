@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ủng hộ</title>
+<style>
+:root{--bg:#f4f6fb;--card:#fff;--tx:#1b1f2a;--mut:#6b7280;--pri:#0068ff;--ok:#16a34a;--err:#dc2626;--bd:#e3e6ee}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1117;--card:#181b24;--tx:#e8eaf0;--mut:#9aa3b2;--bd:#2a2f3c}}
+*{box-sizing:border-box}
+body{margin:0;padding:20px;display:flex;justify-content:center;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.card{width:100%;max-width:440px;background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:24px;box-shadow:0 4px 24px rgba(0,0,0,.05)}
+h1{margin:0 0 4px;font-size:22px}.mut{color:var(--mut);margin:0 0 16px;font-size:14px}
+label{display:block;margin:14px 0 6px;font-size:14px;font-weight:600}
+input,textarea{width:100%;padding:11px 12px;border:1px solid var(--bd);border-radius:10px;background:transparent;color:inherit;font:inherit}
+input:focus,textarea:focus{outline:2px solid var(--pri);border-color:transparent}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:8px 14px;border:1px solid var(--bd);border-radius:999px;background:transparent;color:inherit;cursor:pointer;font:inherit;font-size:14px}
+.chip.on{background:var(--pri);border-color:var(--pri);color:#fff}
+.btn{display:block;width:100%;margin-top:20px;padding:13px;border:0;border-radius:10px;background:var(--pri);color:#fff;font:inherit;font-weight:600;text-align:center;text-decoration:none;cursor:pointer}
+.btn:disabled{opacity:.6;cursor:wait}.btn.sec{background:transparent;color:var(--pri);border:1px solid var(--pri)}
+.err{color:var(--err);font-size:14px;min-height:20px;margin:10px 0 0}
+.center{text-align:center}.amt{font-size:30px;font-weight:700;margin:8px 0}
+#qr{display:flex;justify-content:center;margin:16px 0}#qr img,#qr canvas{max-width:220px;border-radius:8px;background:#fff;padding:8px}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--mut);border-top-color:transparent;border-radius:50%;animation:r 1s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes r{to{transform:rotate(360deg)}}
+.ok{color:var(--ok);font-size:52px;line-height:1}
+</style>
+</head>
+<body>
+<main class="card">
+  <h1 id="title">Ủng hộ</h1>
+  <p class="mut" id="sub">Đang tải…</p>
+
+  <section id="s1" hidden>
+    <div class="chips" id="chips"></div>
+    <label for="amount">Số tiền (VND)</label>
+    <input id="amount" type="number" inputmode="numeric" step="1000" placeholder="Nhập số tiền">
+    <label for="name">Tên của bạn (không bắt buộc)</label>
+    <input id="name" maxlength="120" autocomplete="name">
+    <label for="msg">Lời nhắn (không bắt buộc)</label>
+    <textarea id="msg" rows="3" maxlength="500"></textarea>
+    <div id="prov" hidden><label>Phương thức thanh toán</label><div class="chips" id="provlist"></div></div>
+    <button class="btn" id="go">Tiếp tục thanh toán</button>
+    <p class="err" id="err" role="alert"></p>
+  </section>
+
+  <section id="s2" class="center" hidden>
+    <div class="mut">Số tiền cần thanh toán</div>
+    <div class="amt" id="payamt"></div>
+    <a class="btn" id="paylink" target="_blank" rel="noopener" hidden>Mở trang thanh toán</a>
+    <div id="qr"></div>
+    <p class="mut" id="paynote"></p>
+    <p class="mut"><span class="spin"></span><span id="waiting">Đang chờ thanh toán…</span></p>
+    <button class="btn sec" id="cancel">Hủy / đổi số tiền</button>
+  </section>
+
+  <section id="s3" class="center" hidden>
+    <div class="ok">✓</div>
+    <h1>Cảm ơn bạn!</h1>
+    <p class="mut">Khoản ủng hộ <b id="doneamt"></b> đã được ghi nhận.</p>
+    <button class="btn sec" id="again">Ủng hộ thêm</button>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+<script>
+const slug = location.pathname.split("/").filter(Boolean)[1];
+const API = "/api/v1";
+const $ = id => document.getElementById(id);
+const fmt = n => Number(n).toLocaleString("vi-VN") + " ₫";
+const LABEL = {zalopay: "ZaloPay", vietqr: "Chuyển khoản VietQR", sandbox: "Sandbox (thử nghiệm)"};
+let info = null, provider = null, pollTimer = null;
+
+function show(id){ ["s1","s2","s3"].forEach(s => $(s).hidden = s !== id); }
+
+async function init(){
+  try{
+    const r = await fetch(`${API}/public/${encodeURIComponent(slug)}`);
+    if(!r.ok) throw 0;
+    info = await r.json();
+  }catch{
+    $("sub").textContent = "Không tìm thấy trang ủng hộ này.";
+    return;
+  }
+  document.title = "Ủng hộ " + info.name;
+  $("title").textContent = "Ủng hộ " + info.name;
+  $("sub").textContent = "Chọn số tiền và thanh toán an toàn.";
+  $("amount").min = info.min_amount; $("amount").max = info.max_amount;
+
+  const chips = $("chips");
+  [20000, 50000, 100000, 200000].filter(v => v >= info.min_amount && v <= info.max_amount).forEach(v => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = fmt(v);
+    b.onclick = () => { $("amount").value = v; mark(); };
+    chips.append(b);
+  });
+  $("amount").oninput = mark;
+
+  provider = info.default_provider in LABEL && info.providers.includes(info.default_provider) ? info.default_provider : info.providers[0];
+  if(info.providers.length > 1){
+    $("prov").hidden = false;
+    info.providers.forEach(p => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.dataset.p = p;
+      b.textContent = LABEL[p] || p;
+      b.onclick = () => { provider = p; markProv(); };
+      $("provlist").append(b);
+    });
+    markProv();
+  }
+  show("s1");
+}
+function mark(){ [...$("chips").children].forEach(b => b.classList.toggle("on", b.textContent === fmt($("amount").value))); }
+function markProv(){ [...$("provlist").children].forEach(b => b.classList.toggle("on", b.dataset.p === provider)); }
+
+$("go").onclick = async () => {
+  const err = $("err"); err.textContent = "";
+  const amount = parseInt($("amount").value, 10);
+  if(!Number.isInteger(amount) || amount < info.min_amount || amount > info.max_amount){
+    err.textContent = `Số tiền phải từ ${fmt(info.min_amount)} đến ${fmt(info.max_amount)}.`; return;
+  }
+  const btn = $("go"); btn.disabled = true; btn.textContent = "Đang tạo thanh toán…";
+  try{
+    const r = await fetch(`${API}/public/${encodeURIComponent(slug)}/donations`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({amount, provider, donor_name: $("name").value.trim(), message: $("msg").value.trim()})
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(r.status === 429 ? "Bạn thao tác quá nhanh, thử lại sau ít phút." :
+      r.status === 502 ? "Cổng thanh toán đang gặp sự cố, vui lòng thử lại sau." : (d.error || "Có lỗi xảy ra."));
+    startPayment(d);
+  }catch(e){ err.textContent = e.message; }
+  finally{ btn.disabled = false; btn.textContent = "Tiếp tục thanh toán"; }
+};
+
+function startPayment(d){
+  $("payamt").textContent = fmt(d.amount);
+  const pay = d.payment || {}, link = $("paylink"), qr = $("qr"); qr.innerHTML = ""; $("paynote").textContent = "";
+  const url = pay.payment_url || "";
+  if(url.startsWith("http")){ link.href = url; link.hidden = false; link.textContent = "Mở trang thanh toán " + (LABEL[pay.provider] || ""); } else link.hidden = true;
+  if(url.startsWith("sandbox://")) $("paynote").textContent = "Chế độ thử nghiệm: mã đơn " + pay.order_id + ". Dùng scripts/sandbox_pay.py để giả lập thanh toán.";
+  if(pay.qr_code){
+    if(pay.qr_code.startsWith("http")){ const i = document.createElement("img"); i.src = pay.qr_code; i.alt = "Mã QR thanh toán"; qr.append(i); }
+    else if(window.QRCode){ new QRCode(qr, {text: pay.qr_code, width: 200, height: 200}); }
+    if(!$("paynote").textContent) $("paynote").textContent = "Quét mã QR bằng ứng dụng ngân hàng hoặc ví để thanh toán.";
+  }
+  show("s2"); poll(d.id, d.amount);
+}
+
+function poll(id, amount){
+  clearTimeout(pollTimer);
+  const started = Date.now();
+  const tick = async () => {
+    try{
+      const r = await fetch(`${API}/public/donations/${id}`); const d = await r.json();
+      if(d.status === "completed"){ $("doneamt").textContent = fmt(amount); show("s3"); return; }
+      if(d.status === "failed"){ $("err").textContent = "Thanh toán không thành công."; show("s1"); return; }
+    }catch{}
+    if(Date.now() - started > 20*60*1000){ $("waiting").textContent = "Hết thời gian chờ. Nếu đã thanh toán, khoản ủng hộ sẽ được ghi nhận tự động."; return; }
+    pollTimer = setTimeout(tick, 3000);
+  };
+  pollTimer = setTimeout(tick, 3000);
+}
+$("cancel").onclick = () => { clearTimeout(pollTimer); show("s1"); };
+$("again").onclick = () => { $("amount").value = ""; mark(); show("s1"); };
+init();
+</script>
+</body>
+</html>

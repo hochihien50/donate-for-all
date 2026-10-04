@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Donate Admin</title>
+<style>
+:root{--bg:#f4f6fb;--card:#fff;--tx:#1b1f2a;--mut:#6b7280;--pri:#0068ff;--ok:#16a34a;--warn:#d97706;--err:#dc2626;--bd:#e3e6ee}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1117;--card:#181b24;--tx:#e8eaf0;--mut:#9aa3b2;--bd:#2a2f3c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--card);border-bottom:1px solid var(--bd)}
+header b{font-size:17px}header .sp{flex:1}.mut{color:var(--mut);font-size:13px}
+main{max-width:1000px;margin:20px auto;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:18px;margin-bottom:16px}
+h2{margin:0 0 12px;font-size:17px}h3{margin:0 0 10px;font-size:15px}
+input,textarea{width:100%;padding:9px 11px;border:1px solid var(--bd);border-radius:8px;background:transparent;color:inherit;font:inherit}
+textarea{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+label{display:block;margin:10px 0 5px;font-size:13px;font-weight:600}
+button{padding:8px 14px;border:0;border-radius:8px;background:var(--pri);color:#fff;font:inherit;cursor:pointer}
+button.sec{background:transparent;color:var(--pri);border:1px solid var(--pri)}button.dng{background:var(--err)}
+button:disabled{opacity:.6}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.row>input{flex:1;min-width:200px}
+.auth{max-width:380px;margin:60px auto}.tabs{display:flex;gap:8px;margin-bottom:8px}
+.layout{display:grid;grid-template-columns:230px 1fr;gap:16px}
+@media(max-width:720px){.layout{grid-template-columns:1fr}}
+.plist button{display:block;width:100%;text-align:left;margin-bottom:6px;background:transparent;color:inherit;border:1px solid var(--bd)}
+.plist button.on{border-color:var(--pri);background:rgba(0,104,255,.1)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat{border:1px solid var(--bd);border-radius:10px;padding:10px}.stat b{display:block;font-size:20px}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px 6px;border-bottom:1px solid var(--bd);text-align:left;vertical-align:top}
+th{color:var(--mut);font-weight:600;font-size:12px}.scroll{overflow-x:auto}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;color:#fff}
+.completed{background:var(--ok)}.pending{background:var(--warn)}.failed,.revoked{background:var(--err)}.active{background:var(--ok)}
+.banner{border:1px solid var(--warn);border-radius:10px;padding:12px;margin:10px 0;word-break:break-all}
+.err{color:var(--err);font-size:14px;min-height:20px}
+</style>
+</head>
+<body>
+<header><b>Donate Admin</b><span class="sp"></span><span class="mut" id="who"></span><button class="sec" id="logout" hidden>Đăng xuất</button></header>
+<main id="app"></main>
+
+<script>
+const API = "/api/v1";
+const st = {token: localStorage.getItem("tk"), email: localStorage.getItem("em"), projects: [], cur: null, timer: null};
+const fmt = n => Number(n).toLocaleString("vi-VN") + " ₫";
+const dt = s => s ? new Date(s).toLocaleString("vi-VN") : "";
+const STATUS = {completed: "Hoàn tất", pending: "Chờ thanh toán", failed: "Thất bại"};
+
+function h(tag, props = {}, ...kids){
+  const e = document.createElement(tag);
+  for(const [k, v] of Object.entries(props)){
+    if(k === "class") e.className = v;
+    else if(k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for(const c of kids.flat()){ if(c == null) continue; e.append(c.nodeType ? c : document.createTextNode(c)); }
+  return e;
+}
+async function api(path, opt = {}){
+  const r = await fetch(API + path, {...opt, headers: {"Content-Type": "application/json", ...(st.token ? {Authorization: "Bearer " + st.token} : {})}});
+  if(r.status === 401 && st.token && !path.startsWith("/auth")){ logout(); throw new Error("Phiên đăng nhập đã hết hạn"); }
+  const d = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(d.error || "Lỗi " + r.status);
+  return d;
+}
+function copy(text, btn){
+  navigator.clipboard.writeText(text).then(() => { const o = btn.textContent; btn.textContent = "Đã chép ✓"; setTimeout(() => btn.textContent = o, 1500); });
+}
+function logout(){
+  clearInterval(st.timer);
+  st.token = st.email = null; st.projects = []; st.cur = null;
+  localStorage.removeItem("tk"); localStorage.removeItem("em");
+  render();
+}
+
+/* ---------- auth ---------- */
+function renderAuth(){
+  let mode = "login";
+  const err = h("p", {class: "err", role: "alert"});
+  const email = h("input", {type: "email", placeholder: "Email", autocomplete: "email"});
+  const pw = h("input", {type: "password", placeholder: "Mật khẩu (tối thiểu 8 ký tự)", autocomplete: "current-password"});
+  const go = h("button", {}, "Đăng nhập");
+  const tl = h("button", {class: "on"}, "Đăng nhập"), tr = h("button", {class: "sec"}, "Đăng ký");
+  const setMode = m => { mode = m; go.textContent = m === "login" ? "Đăng nhập" : "Tạo tài khoản"; tl.className = m === "login" ? "" : "sec"; tr.className = m === "login" ? "sec" : ""; err.textContent = ""; };
+  tl.onclick = () => setMode("login"); tr.onclick = () => setMode("register");
+  go.onclick = async () => {
+    err.textContent = ""; go.disabled = true;
+    try{
+      const body = JSON.stringify({email: email.value, password: pw.value});
+      if(mode === "register") await api("/auth/register", {method: "POST", body});
+      const d = await api("/auth/login", {method: "POST", body});
+      st.token = d.token; st.email = email.value.toLowerCase();
+      localStorage.setItem("tk", st.token); localStorage.setItem("em", st.email);
+      render();
+    }catch(e){ err.textContent = e.message; }
+    finally{ go.disabled = false; }
+  };
+  pw.addEventListener("keydown", e => { if(e.key === "Enter") go.click(); });
+  return h("div", {class: "card auth"}, h("div", {class: "tabs"}, tl, tr), email, h("div", {style: "height:8px"}), pw, h("div", {style: "height:12px"}), go, err);
+}
+
+/* ---------- main ---------- */
+async function loadProjects(selectId){
+  st.projects = await api("/projects");
+  st.cur = st.projects.find(p => p.id === selectId) || st.cur && st.projects.find(p => p.id === st.cur.id) || st.projects[0] || null;
+}
+function renderMain(){
+  const list = h("div", {class: "plist"});
+  const detail = h("div", {id: "detail"});
+  const nameIn = h("input", {placeholder: "Tên website / dự án"});
+  const perr = h("p", {class: "err"});
+  const add = h("button", {}, "Tạo dự án");
+  add.onclick = async () => {
+    perr.textContent = "";
+    try{ const p = await api("/projects", {method: "POST", body: JSON.stringify({name: nameIn.value})}); nameIn.value = ""; await loadProjects(p.id); render(); }
+    catch(e){ perr.textContent = e.message; }
+  };
+  st.projects.forEach(p => list.append(h("button", {class: st.cur && st.cur.id === p.id ? "on" : "", onclick: () => { st.cur = p; render(); }}, p.name)));
+  const side = h("div", {}, h("div", {class: "card"}, h("h3", {}, "Dự án"), list, nameIn, h("div", {style: "height:8px"}), add, perr));
+  if(st.cur) loadDetail(detail);
+  else detail.append(h("div", {class: "card"}, "Chưa có dự án nào. Hãy tạo dự án đầu tiên ở bên trái."));
+  return h("div", {class: "layout"}, side, detail);
+}
+
+async function loadDetail(box){
+  const p = st.cur, origin = location.origin;
+  const link = `${origin}/d/${p.slug}`;
+  const embed = `<iframe src="${link}" width="100%" height="680" style="border:0;max-width:480px" title="Ủng hộ"></iframe>`;
+  const newKey = h("div"), keysBox = h("div"), donBox = h("div"), statsBox = h("div");
+
+  const linkBtn = h("button", {}, "Sao chép");
+  linkBtn.onclick = () => copy(link, linkBtn);
+  const embBtn = h("button", {}, "Sao chép");
+  embBtn.onclick = () => copy(embed, embBtn);
+  box.replaceChildren(
+    h("div", {class: "card"}, h("h2", {}, p.name),
+      h("label", {}, "Link trang ủng hộ (gửi cho người ủng hộ)"),
+      h("div", {class: "row"}, h("input", {value: link, readonly: ""}), linkBtn, h("a", {href: link, target: "_blank", rel: "noopener"}, h("button", {class: "sec"}, "Mở"))),
+      h("label", {}, "Nhúng vào website của bạn"),
+      h("div", {class: "row"}, h("textarea", {rows: "2", readonly: ""}, embed), embBtn)),
+    h("div", {class: "card"}, h("h2", {}, "Thống kê"), statsBox),
+    h("div", {class: "card"}, h("h2", {}, "API key (dành cho website tự tích hợp qua backend)"), newKey, keysBox),
+    h("div", {class: "card"}, h("h2", {}, "Donation gần đây"), h("div", {class: "scroll"}, donBox))
+  );
+
+  async function refreshKeys(){
+    const keys = await api(`/projects/${p.id}/api-keys`);
+    const mk = h("button", {}, "Tạo API key mới");
+    mk.onclick = async () => {
+      const d = await api(`/projects/${p.id}/api-keys`, {method: "POST"});
+      const cb = h("button", {class: "sec"}, "Sao chép");
+      cb.onclick = () => copy(d.api_key, cb);
+      newKey.replaceChildren(h("div", {class: "banner"}, h("b", {}, "Lưu key này ngay, sẽ không hiển thị lại: "), h("div", {}, h("code", {}, d.api_key)), h("div", {style: "margin-top:8px"}, cb)));
+      refreshKeys();
+    };
+    keysBox.replaceChildren(mk, h("div", {class: "scroll", style: "margin-top:10px"}, h("table", {},
+      h("tr", {}, h("th", {}, "Key"), h("th", {}, "Tạo lúc"), h("th", {}, "Trạng thái"), h("th", {})),
+      keys.map(k => h("tr", {}, h("td", {}, h("code", {}, k.key_prefix + "…")), h("td", {}, dt(k.created_at)),
+        h("td", {}, h("span", {class: "badge " + (k.revoked_at ? "revoked" : "active")}, k.revoked_at ? "Đã thu hồi" : "Đang dùng")),
+        h("td", {}, k.revoked_at ? "" : h("button", {class: "dng", onclick: async () => { if(confirm("Thu hồi key này? Website đang dùng nó sẽ ngừng hoạt động.")){ await api(`/projects/${p.id}/api-keys/${k.id}`, {method: "DELETE"}); refreshKeys(); } }}, "Thu hồi")))))));
+  }
+  async function refreshDon(){
+    const d = await api(`/projects/${p.id}/donations`);
+    const S = d.stats;
+    statsBox.replaceChildren(h("div", {class: "stats"},
+      h("div", {class: "stat"}, h("span", {class: "mut"}, "Đã nhận"), h("b", {}, fmt(S.completed.total)), h("span", {class: "mut"}, S.completed.count + " lượt")),
+      h("div", {class: "stat"}, h("span", {class: "mut"}, "Đang chờ"), h("b", {}, S.pending.count), h("span", {class: "mut"}, "lượt")),
+      h("div", {class: "stat"}, h("span", {class: "mut"}, "Thất bại"), h("b", {}, S.failed.count), h("span", {class: "mut"}, "lượt"))));
+    donBox.replaceChildren(d.donations.length ? h("table", {},
+      h("tr", {}, h("th", {}, "Thời gian"), h("th", {}, "Người ủng hộ"), h("th", {}, "Số tiền"), h("th", {}, "Cổng"), h("th", {}, "Trạng thái"), h("th", {}, "Lời nhắn")),
+      d.donations.map(x => h("tr", {}, h("td", {}, dt(x.created_at)), h("td", {}, x.donor_name || "Ẩn danh"), h("td", {}, fmt(x.amount)),
+        h("td", {}, x.payment ? x.payment.provider : ""), h("td", {}, h("span", {class: "badge " + x.status}, STATUS[x.status] || x.status)), h("td", {}, x.message || "")))) : h("p", {class: "mut"}, "Chưa có donation nào."));
+  }
+  try{ await Promise.all([refreshKeys(), refreshDon()]); }catch(e){ box.append(h("p", {class: "err"}, e.message)); }
+  clearInterval(st.timer);
+  st.timer = setInterval(() => { if(document.visibilityState === "visible") refreshDon().catch(() => {}); }, 10000);
+}
+
+async function render(){
+  const app = document.getElementById("app");
+  document.getElementById("who").textContent = st.email || "";
+  document.getElementById("logout").hidden = !st.token;
+  if(!st.token){ clearInterval(st.timer); app.replaceChildren(renderAuth()); return; }
+  try{ if(!st.projects.length) await loadProjects(); }catch(e){ return; }
+  app.replaceChildren(renderMain());
+}
+document.getElementById("logout").onclick = logout;
+render();
+</script>
+</body>
+</html>
