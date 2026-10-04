@@ -1,0 +1,43 @@
+# Web Service (Flask) -> Render PostgreSQL. Data lives in the database, not on the web service disk.
+databases:
+  - name: donate-db
+    plan: basic-256mb          # free Postgres expires after 30 days; use a paid plan for real money
+    databaseName: donate
+    user: donate
+
+services:
+  - type: web
+    name: donate-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    # `db upgrade` only applies pending, non-destructive migrations. It never drops data.
+    startCommand: flask --app wsgi db upgrade && gunicorn wsgi:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: donate-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: PAYMENT_MODE
+        value: sandbox          # change to "live" once you have production ZaloPay credentials
+      - key: ENABLED_PROVIDERS
+        value: zalopay
+      - key: DEFAULT_PROVIDER
+        value: zalopay
+      - key: ZALOPAY_APP_ID
+        sync: false
+      - key: ZALOPAY_KEY1
+        sync: false
+      - key: ZALOPAY_KEY2
+        sync: false
+      - key: ZALOPAY_CALLBACK_URL
+        sync: false
