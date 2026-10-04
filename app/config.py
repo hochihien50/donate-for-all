@@ -31,6 +31,9 @@ def load_config():
         secret = secret or "dev-only-secret-key-change-me-0000000000"
         origins = origins or ["http://localhost:3000"]
 
+    if db_url.startswith("postgresql://"):  # pin the psycopg2 driver explicitly
+        db_url = "postgresql+psycopg2://" + db_url[len("postgresql://"):]
+
     return {
         "APP_ENV": env,
         "SQLALCHEMY_DATABASE_URI": db_url,
